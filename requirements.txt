@@ -1,0 +1,10 @@
+chainlit
+requests
+beautifulsoup4
+markdownify
+transformers
+sentence-transformers
+torch
+scikit-learn
+numpy
+pickle5; python_version < "3.8"
