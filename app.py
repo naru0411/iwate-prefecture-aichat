@@ -1,59 +1,91 @@
-import chainlit as cl
+import streamlit as st
 from core import RAGSystem
-import asyncio
+import time
 
-# RAGシステムの初期化
-rag = RAGSystem()
+# ページ設定
+st.set_page_config(page_title="岩手県立大学 RAGチャットボット", page_icon="🎓")
 
-@cl.on_chat_start
-async def start():
-    # 初回メッセージ
-    msg = cl.Message(content="システムを起動中... (モデルのロードとデータの準備を行います)")
-    await msg.send()
-    
-    # モデルのロードとデータの準備（重い処理なので非同期でラップして実行を検討するが、
-    # 起動時に一度だけ必要なのでここで実行）
-    try:
-        # 他のスレッドで実行してUIをブロックしないようにする
-        await asyncio.to_thread(rag.load_models)
-        await asyncio.to_thread(rag.prepare_data)
-        
-        msg.content = "準備が完了しました！岩手県立大学について何でも聞いてください。"
-        await msg.update()
-    except Exception as e:
-        msg.content = f"起動中にエラーが発生しました: {str(e)}"
-        await msg.update()
+st.title("🎓 岩手県立大学 AIアシスタント")
+st.markdown("岩手県立大学に関する質問に、公式サイトの情報をもとに回答します。")
 
-@cl.on_message
-async def main(message: cl.Message):
-    # ステータス表示
-    status_msg = cl.Message(content="")
-    
-    # 1. 検索フェーズ
-    async with cl.Step(name="資料を検索中...") as step:
-        context_texts, ref_urls = await asyncio.to_thread(rag.search, message.content)
-        combined_context = "\n\n".join(context_texts)
-        step.output = f"{len(ref_urls)} 個の関連資料が見つかりました。"
+# RAGシステムの初期化（キャッシュを使用してモデルのロードを1回にする）
+@st.cache_resource
+def get_rag_system():
+    rag = RAGSystem()
+    rag.load_models()
+    return rag
 
-    # 2. 生成フェーズ
-    async with cl.Step(name="回答を生成中...") as step:
-        answer = await asyncio.to_thread(rag.generate_answer, message.content, combined_context)
-        step.output = "回答の生成が完了しました。"
+# データの準備（キャッシュを使用してスクレイピング/ベクトル化を1回にする）
+@st.cache_data
+def prepare_rag_data(_rag):
+    _rag.prepare_data()
+    return True
 
-    # Sources (出典) の作成
-    elements = []
-    for i, url in enumerate(ref_urls):
-        elements.append(
-            cl.Text(name=f"Source {i+1}", content=url, display="inline")
-        )
+# セッション状態の初期化
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # 最終回答の送信
-    res_msg = cl.Message(content=answer, elements=elements)
-    
-    # 出典リストをテキストでも追加（Chainlit機能と併用）
-    if ref_urls:
-        res_msg.content += "\n\n**【参照リンク】**\n"
-        for url in ref_urls:
-            res_msg.content += f"- {url}\n"
+# システムのロード
+with st.sidebar:
+    st.header("システム設定")
+    if st.button("キャッシュをクリアして再取得"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+
+try:
+    with st.status("システムを起動中...", expanded=True) as status:
+        st.write("モデルをロードしています...")
+        rag = get_rag_system()
+        st.write("データを準備しています（初回は数分かかります）...")
+        prepare_rag_data(rag)
+        status.update(label="準備完了！", state="complete", expanded=False)
+except Exception as e:
+    st.error(f"起動中にエラーが発生しました: {e}")
+    st.stop()
+
+# チャット履歴の表示
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "elements" in message:
+            with st.expander("出典"):
+                for url in message["elements"]:
+                    st.write(f"- {url}")
+
+# ユーザー入力
+if prompt := st.chat_input("岩手県立大学について教えてください"):
+    # ユーザーメッセージの表示
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # アシスタントの回答生成
+    with st.chat_message("assistant"):
+        with st.status("回答を作成しています...", expanded=True) as status:
+            # 1. 検索
+            st.write("関連資料を検索中...")
+            context_texts, ref_urls = rag.search(prompt)
+            combined_context = "\n\n".join(context_texts)
             
-    await res_msg.send()
+            # 2. 生成
+            st.write("回答を生成中...")
+            answer = rag.generate_answer(prompt, combined_context)
+            
+            status.update(label="回答が完了しました", state="complete", expanded=False)
+
+        # 回答の表示
+        st.markdown(answer)
+        
+        # 出典の表示
+        if ref_urls:
+            with st.expander("出典"):
+                for url in ref_urls:
+                    st.write(f"- {url}")
+        
+        # セッション履歴に保存
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": answer, 
+            "elements": ref_urls
+        })

@@ -139,7 +139,7 @@ class RAGSystem:
         self.chunked_data, self.chunked_metadata = self.token_based_chunking(raw_data)
         
         print("Vectorizing data...")
-        self.docs_embeddings = self.embd_model.encode(self.chunked_data, batch_size=32, show_progress_bar=True)
+        self.docs_embeddings = self.embd_model.encode(self.chunked_data, batch_size=32, show_progress_bar=False)
         norms = np.linalg.norm(self.docs_embeddings, axis=1, keepdims=True)
         self.docs_embeddings = self.docs_embeddings / np.clip(norms, 1e-12, None)
 
@@ -152,7 +152,8 @@ class RAGSystem:
         print("Data preparation complete and cached.")
 
     def search(self, query: str, top_k: int = 3) -> Tuple[List[str], List[str]]:
-        query_vec = self.embd_model.encode([query], prompt_name="query")[0]
+        # 明示的に CPU または特定のデバイスで実行し、非同期イベントを避ける
+        query_vec = self.embd_model.encode([query], prompt_name="query", show_progress_bar=False)[0]
         query_vec = query_vec / np.linalg.norm(query_vec)
         raw_scores = cosine_similarity([query_vec], self.docs_embeddings)[0]
 
