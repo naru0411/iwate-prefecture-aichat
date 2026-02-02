@@ -28,7 +28,7 @@ class RAGSystem:
         self.docs_embeddings = None
         
         self.gen_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
-        self.embd_model_name = "Qwen/Qwen3-Embedding-0.6B"
+        self.embd_model_name = "intfloat/multilingual-e5-small"
 
     def load_models(self):
         print("Loading models...")
@@ -134,12 +134,14 @@ class RAGSystem:
                 self.docs_embeddings = cache["embeddings"]
             return
 
-        print("No cache found. Starting scraping...")
-        raw_data = self.fetch_ipu_pages_clean()
+        print("No cache found. Starting scraping (limited to 30 pages for test)...")
+        raw_data = self.fetch_ipu_pages_clean(max_pages=30)
         self.chunked_data, self.chunked_metadata = self.token_based_chunking(raw_data)
         
-        print("Vectorizing data...")
-        self.docs_embeddings = self.embd_model.encode(self.chunked_data, batch_size=32, show_progress_bar=False)
+        print("Vectorizing data with multilingual-e5-small...")
+        # e5 models usually require 'passage: ' prefix for documents
+        passage_prefixed_data = [f"passage: {chunk}" for chunk in self.chunked_data]
+        self.docs_embeddings = self.embd_model.encode(passage_prefixed_data, batch_size=32, show_progress_bar=False)
         norms = np.linalg.norm(self.docs_embeddings, axis=1, keepdims=True)
         self.docs_embeddings = self.docs_embeddings / np.clip(norms, 1e-12, None)
 
@@ -152,8 +154,8 @@ class RAGSystem:
         print("Data preparation complete and cached.")
 
     def search(self, query: str, top_k: int = 3) -> Tuple[List[str], List[str]]:
-        # 明示的に CPU または特定のデバイスで実行し、非同期イベントを避ける
-        query_vec = self.embd_model.encode([query], prompt_name="query", show_progress_bar=False)[0]
+        # e5 models require 'query: ' prefix for queries
+        query_vec = self.embd_model.encode([f"query: {query}"], show_progress_bar=False)[0]
         query_vec = query_vec / np.linalg.norm(query_vec)
         raw_scores = cosine_similarity([query_vec], self.docs_embeddings)[0]
 
