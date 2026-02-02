@@ -13,13 +13,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import urllib3
-from threading import Thread
 
 # SSL証明書エラーの警告を非表示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class RAGSystem:
-    def __init__(self, cache_path="data_full.pkl"):
+    def __init__(self, cache_path="data_70.pkl"):
         self.cache_path = cache_path
         self.tokenizer = None
         self.model = None
@@ -28,7 +27,7 @@ class RAGSystem:
         self.chunked_metadata = []
         self.docs_embeddings = None
         
-        self.gen_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+        self.gen_model_name = "Qwen/Qwen2.5-0.5B-Instruct"
         self.embd_model_name = "intfloat/multilingual-e5-small"
 
     def load_models(self):
@@ -161,8 +160,8 @@ class RAGSystem:
                 self.docs_embeddings = cache["embeddings"]
             return
 
-        print("No cache found. Starting full scraping (133 pages)...")
-        raw_data = self.fetch_ipu_pages_clean(max_pages=133, progress_callback=progress_callback)
+        print("No cache found. Starting scraping (limited to 70 pages)...")
+        raw_data = self.fetch_ipu_pages_clean(max_pages=70, progress_callback=progress_callback)
         self.chunked_data, self.chunked_metadata = self.token_based_chunking(raw_data)
         
         print("Vectorizing data with multilingual-e5-small...")
@@ -229,8 +228,8 @@ class RAGSystem:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=300,
-                temperature=0.0,
+                max_new_tokens=200,
+                num_beams=1,
                 do_sample=False
             )
         
@@ -239,51 +238,3 @@ class RAGSystem:
             return "申し訳ありません。現時点の資料には詳しい記載がありませんでした。\n回答に近いと思われる以下のWebページをご確認いただけますでしょうか。"
         return answer
 
-    def generate_answer_stream(self, query: str, context: str) -> Generator[str, None, None]:
-        """ストリーミング形式で回答を生成"""
-        prompt = f"""あなたは岩手県立大学の広報アシスタントAIです。
-以下の【参照資料】の内容を統合して、ユーザーの【質問】に詳しく答えてください。
-
-### 重要ルール
-1. 複数の資料を組み合わせて、可能な限り回答を作成してください。
-2. 回答文の中にURLは含めないでください。嘘も絶対に書かないでください。
-3. **どうしても情報が見つからない場合は、言い訳をせずに『NO_INFO』とだけ出力してください。余計な文章は不要です。**
-
-### 質問
-{query}
-
-### 参照資料
-{context}
-
-### 回答
-"""
-        messages = [{"role": "user", "content": prompt}]
-        input_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
-
-        # ストリーマーの設定
-        streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True, skip_prompt=True)
-        
-        generation_kwargs = dict(
-            **inputs,
-            streamer=streamer,
-            max_new_tokens=300,
-            temperature=0.0,
-            do_sample=False
-        )
-
-        # 別スレッドで生成を開始
-        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
-        thread.start()
-
-        # ストリーミング出力
-        full_response = ""
-        for new_text in streamer:
-            full_response += new_text
-            yield new_text
-
-        thread.join()
-
-        # NO_INFO チェック
-        if "NO_INFO" in full_response or "申し訳ありません" in full_response:
-            yield "\n\n申し訳ありません。現時点の資料には詳しい記載がありませんでした。\n回答に近いと思われる以下のWebページをご確認いただけますでしょうか。"
