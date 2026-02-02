@@ -18,21 +18,40 @@ def get_rag_system():
 # データの準備（キャッシュを使用してスクレイピング/ベクトル化を1回にする）
 @st.cache_data
 def prepare_rag_data(_rag):
-    _rag.prepare_data()
+    # プログレスバーとステータス表示用のプレースホルダー
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    def progress_callback(current, total):
+        progress = current / total
+        progress_bar.progress(progress)
+        status_text.text(f"スクレイピング中: {current}/{total} ページ")
+    
+    _rag.prepare_data(progress_callback=progress_callback)
+    
+    progress_bar.empty()
+    status_text.empty()
     return True
 
 # セッション状態の初期化
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# システムのロード
+# サイドバー
 with st.sidebar:
     st.header("システム設定")
+    st.info("💡 初回起動時は全133ページのスクレイピングに数分かかります。")
+    
     if st.button("キャッシュをクリアして再取得"):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
+    
+    st.divider()
+    st.caption("🚀 4-bit量子化により高速化")
+    st.caption("📚 multilingual-e5-small 埋め込み")
 
+# システムのロード
 try:
     with st.status("システムを起動中...", expanded=True) as status:
         st.write("モデルをロードしています...")
@@ -49,7 +68,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "elements" in message:
-            with st.expander("出典"):
+            with st.expander("📚 出典"):
                 for url in message["elements"]:
                     st.write(f"- {url}")
 
@@ -64,28 +83,34 @@ if prompt := st.chat_input("岩手県立大学について教えてください"
     with st.chat_message("assistant"):
         with st.status("回答を作成しています...", expanded=True) as status:
             # 1. 検索
-            st.write("関連資料を検索中...")
+            st.write("🔍 関連資料を検索中...")
             context_texts, ref_urls = rag.search(prompt)
             combined_context = "\n\n".join(context_texts)
             
-            # 2. 生成
-            st.write("回答を生成中...")
-            answer = rag.generate_answer(prompt, combined_context)
-            
-            status.update(label="回答が完了しました", state="complete", expanded=False)
-
-        # 回答の表示
-        st.markdown(answer)
+            # 2. 生成（ストリーミング）
+            st.write("✍️ 回答を生成中...")
+            status.update(label="回答中...", state="running", expanded=False)
+        
+        # ストリーミング表示
+        response_placeholder = st.empty()
+        full_response = ""
+        
+        for chunk in rag.generate_answer_stream(prompt, combined_context):
+            full_response += chunk
+            response_placeholder.markdown(full_response + "▌")
+            time.sleep(0.01)  # 視覚効果のための微小な遅延
+        
+        response_placeholder.markdown(full_response)
         
         # 出典の表示
         if ref_urls:
-            with st.expander("出典"):
+            with st.expander("📚 出典"):
                 for url in ref_urls:
                     st.write(f"- {url}")
         
         # セッション履歴に保存
         st.session_state.messages.append({
             "role": "assistant", 
-            "content": answer, 
+            "content": full_response, 
             "elements": ref_urls
         })

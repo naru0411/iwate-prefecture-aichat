@@ -7,4 +7,6 @@ sentence-transformers
 torch
 scikit-learn
 numpy
+bitsandbytes
+accelerate
 pickle5; python_version < "3.8"
