@@ -227,7 +227,12 @@ class RAGSystem:
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
 
         with torch.no_grad():
-            outputs = self.model.generate(**inputs, max_new_tokens=1024, temperature=0.0, do_sample=False)
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=300,
+                temperature=0.0,
+                do_sample=False
+            )
         
         answer = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
         if "NO_INFO" in answer or "申し訳ありません" in answer:
@@ -262,7 +267,7 @@ class RAGSystem:
         generation_kwargs = dict(
             **inputs,
             streamer=streamer,
-            max_new_tokens=1024,
+            max_new_tokens=300,
             temperature=0.0,
             do_sample=False
         )

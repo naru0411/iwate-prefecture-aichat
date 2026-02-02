@@ -91,16 +91,8 @@ if prompt := st.chat_input("岩手県立大学について教えてください"
             st.write("✍️ 回答を生成中...")
             status.update(label="回答中...", state="running", expanded=False)
         
-        # ストリーミング表示
-        response_placeholder = st.empty()
-        full_response = ""
-        
-        for chunk in rag.generate_answer_stream(prompt, combined_context):
-            full_response += chunk
-            response_placeholder.markdown(full_response + "▌")
-            time.sleep(0.01)  # 視覚効果のための微小な遅延
-        
-        response_placeholder.markdown(full_response)
+        # st.write_stream を使用したストリーミング表示
+        full_response = st.write_stream(rag.generate_answer_stream(prompt, combined_context))
         
         # 出典の表示
         if ref_urls:
