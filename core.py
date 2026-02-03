@@ -18,7 +18,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class RAGSystem:
-    def __init__(self, cache_path="data_70.pkl"):
+    def __init__(self, cache_path="data_20.pkl"):
         self.cache_path = cache_path
         self.tokenizer = None
         self.model = None
@@ -27,7 +27,7 @@ class RAGSystem:
         self.chunked_metadata = []
         self.docs_embeddings = None
         
-        self.gen_model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+        self.gen_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
         self.embd_model_name = "intfloat/multilingual-e5-small"
 
     def load_models(self):
@@ -160,8 +160,8 @@ class RAGSystem:
                 self.docs_embeddings = cache["embeddings"]
             return
 
-        print("No cache found. Starting scraping (limited to 70 pages)...")
-        raw_data = self.fetch_ipu_pages_clean(max_pages=70, progress_callback=progress_callback)
+        print("No cache found. Starting stable scraping (20 pages)...")
+        raw_data = self.fetch_ipu_pages_clean(max_pages=20, progress_callback=progress_callback)
         self.chunked_data, self.chunked_metadata = self.token_based_chunking(raw_data)
         
         print("Vectorizing data with multilingual-e5-small...")
@@ -228,8 +228,8 @@ class RAGSystem:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=200,
-                num_beams=1,
+                max_new_tokens=300,
+                repetition_penalty=1.1,
                 do_sample=False
             )
         
