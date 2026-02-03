@@ -87,11 +87,11 @@ if prompt := st.chat_input("岩手県立大学について教えてください"
             context_texts, ref_urls = rag.search(prompt)
             combined_context = "\n\n".join(context_texts)
             
-            # 2. 生成（ストリーミング）
+            # 2. 生成（同期）
             st.write("✍️ 回答を生成中...")
             status.update(label="回答中...", state="running", expanded=False)
         
-        # 生成（同期）
+        # 生成（一括）
         answer = rag.generate_answer(prompt, combined_context)
         
         # 回答の表示
