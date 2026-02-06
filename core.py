@@ -179,7 +179,7 @@ class RAGSystem:
             }, f)
         print("Data preparation complete and cached.")
 
-    def search(self, query: str, top_k: int = 3) -> Tuple[List[str], List[str]]:
+    def search(self, query: str, top_k: int = 2) -> Tuple[List[str], List[str]]:
         # e5 models require 'query: ' prefix for queries
         query_vec = self.embd_model.encode([f"query: {query}"], show_progress_bar=False)[0]
         query_vec = query_vec / np.linalg.norm(query_vec)
@@ -205,13 +205,10 @@ class RAGSystem:
         return context_texts, ref_urls
 
     def generate_answer(self, query: str, context: str) -> str:
-        prompt = f"""あなたは岩手県立大学の広報アシスタントAIです。
-以下の【参照資料】の内容を統合して、ユーザーの【質問】に詳しく答えてください。
-
-### 重要ルール
-1. 複数の資料を組み合わせて、可能な限り回答を作成してください。
-2. 回答文の中にURLは含めないでください。嘘も絶対に書かないでください。
-3. **どうしても情報が見つからない場合は、言い訳をせずに『NO_INFO』とだけ出力してください。余計な文章は不要です。**
+        # プロンプトを極限まで圧縮してトークン数を節約
+        prompt = f"""あなたは岩手県立大学のAIアシスタントです。
+【参照資料】のみを用いて、ユーザーの【質問】に簡潔に答えてください。
+情報がない場合は『NO_INFO』と出力してください。
 
 ### 質問
 {query}
@@ -228,7 +225,7 @@ class RAGSystem:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=300,
+                max_new_tokens=150,
                 repetition_penalty=1.1,
                 do_sample=False
             )
