@@ -48,8 +48,8 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    st.caption("🚀 Qwen2.5-1.5B (安定版)")
-    st.caption("📚 20ページ制限 (安定化)")
+    st.caption("🚀 Qwen2.5-1.5B (省メモリ版)")
+    st.caption("📚 20ページ制限 (Chunk300)")
 
 # システムのロード
 try:

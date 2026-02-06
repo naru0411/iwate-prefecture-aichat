@@ -13,12 +13,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import urllib3
+import gc
 
 # SSL証明書エラーの警告を非表示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class RAGSystem:
-    def __init__(self, cache_path="data_20.pkl"):
+    def __init__(self, cache_path="data_20_mem_opt.pkl"):
         self.cache_path = cache_path
         self.tokenizer = None
         self.model = None
@@ -59,7 +60,8 @@ class RAGSystem:
                 trust_remote_code=True
             )
         
-        self.embd_model = SentenceTransformer(self.embd_model_name, trust_remote_code=True, device="cuda" if torch.cuda.is_available() else "cpu")
+        # メモリ節約のため、埋め込みモデルはCPUに強制配置
+        self.embd_model = SentenceTransformer(self.embd_model_name, trust_remote_code=True, device="cpu")
 
     def fetch_ipu_pages_clean(self, base_url: str="https://www.iwate-pu.ac.jp/", max_pages: int=133, progress_callback=None):
         results = []
@@ -122,7 +124,7 @@ class RAGSystem:
                 except Exception: pass
         return results
 
-    def token_based_chunking(self, search_results, chunk_size=500):
+    def token_based_chunking(self, search_results, chunk_size=300):
         chunks = []
         metadatas = []
         for res in search_results:
@@ -170,6 +172,10 @@ class RAGSystem:
         self.docs_embeddings = self.embd_model.encode(passage_prefixed_data, batch_size=32, show_progress_bar=False)
         norms = np.linalg.norm(self.docs_embeddings, axis=1, keepdims=True)
         self.docs_embeddings = self.docs_embeddings / np.clip(norms, 1e-12, None)
+        
+        # メモリ解放
+        del raw_data
+        gc.collect()
 
         with open(self.cache_path, "wb") as f:
             pickle.dump({
@@ -221,6 +227,10 @@ class RAGSystem:
         messages = [{"role": "user", "content": prompt}]
         input_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
+
+        # 生成前のメモリクリーンアップ
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         with torch.no_grad():
             outputs = self.model.generate(
