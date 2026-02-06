@@ -8,6 +8,6 @@ torch
 scikit-learn
 numpy
 highlighter
-llama-cpp-python
-huggingface_hub
+bitsandbytes
+accelerate
 pickle5; python_version < "3.8"

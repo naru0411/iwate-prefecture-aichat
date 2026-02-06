@@ -48,8 +48,8 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    st.caption("🚀 Llama.cpp (GGUF)")
-    st.caption("⚡ Native Fast Inference")
+    st.caption("🚀 Qwen2.5-1.5B (Hybrid Opt)")
+    st.caption("⚡ Top-k=2 / Chunk300")
 
 # システムのロード
 try:
