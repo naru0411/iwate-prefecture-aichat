@@ -2,18 +2,18 @@ import re
 import time
 import requests
 import numpy as np
-import torch
 import pickle
 import os
+import gc
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from markdownify import markdownify as md
-from typing import List, Dict, Tuple, Generator
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from llama_cpp import Llama
+from huggingface_hub import base_cli
 import urllib3
-import gc
 
 # SSL証明書エラーの警告を非表示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,49 +21,50 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class RAGSystem:
     def __init__(self, cache_path="data_20_mem_opt.pkl"):
         self.cache_path = cache_path
-        self.tokenizer = None
-        self.model = None
+        self.llm = None
         self.embd_model = None
         self.chunked_data = []
         self.chunked_metadata = []
         self.docs_embeddings = None
         
-        self.gen_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+        # GGUFモデル設定
+        self.model_repo = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+        self.model_filename = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
         self.embd_model_name = "intfloat/multilingual-e5-small"
 
     def load_models(self):
-        print("Loading models with 4-bit quantization...")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.gen_model_name, trust_remote_code=True)
+        print("Loading GGUF model...")
         
-        # 4-bit量子化設定（Windows互換性を考慮）
+        # モデルのダウンロード（カレントディレクトリにキャッシュ）
+        model_path = f"./{self.model_filename}"
+        if not os.path.exists(model_path):
+            print(f"Downloading {self.model_filename}...")
+            # huggingface-cli を使ってダウンロードする代替手段
+            # 簡易的に huggingface_hub の関数を使うか、ユーザーにダウンロードさせるのが確実だが、
+            # ここでは llama_cppのfrom_pretrained的な挙動を自前で実装するか、
+            # huggingface_hub.hf_hub_download を使用する。
+            from huggingface_hub import hf_hub_download
+            model_path = hf_hub_download(repo_id=self.model_repo, filename=self.model_filename)
+        
+        # Llama.cpp の初期化
+        # n_gpu_layers=-1 でGPUを最大限利用（CUDA環境があれば）
+        # n_ctx=2048 でコンテキストサイズを確保
         try:
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4"
+            self.llm = Llama(
+                model_path=model_path,
+                n_gpu_layers=-1, 
+                n_ctx=4096,
+                verbose=True
             )
-            
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.gen_model_name,
-                quantization_config=quantization_config,
-                device_map="auto",
-                trust_remote_code=True
-            )
-            print("Model loaded with 4-bit quantization successfully.")
+            print("Llama.cpp model loaded successfully.")
         except Exception as e:
-            print(f"Quantization failed ({e}), loading without quantization...")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.gen_model_name,
-                device_map="auto",
-                torch_dtype="auto",
-                trust_remote_code=True
-            )
-        
-        # メモリ節約のため、埋め込みモデルはCPUに強制配置
+            print(f"Failed to load Llama.cpp model: {e}")
+            raise e
+
+        # 埋め込みモデル（変更なし、CPU）
         self.embd_model = SentenceTransformer(self.embd_model_name, trust_remote_code=True, device="cpu")
 
-    def fetch_ipu_pages_clean(self, base_url: str="https://www.iwate-pu.ac.jp/", max_pages: int=133, progress_callback=None):
+    def fetch_ipu_pages_clean(self, base_url: str="https://www.iwate-pu.ac.jp/", max_pages: int=20, progress_callback=None):
         results = []
         visited_urls = set()
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -125,28 +126,33 @@ class RAGSystem:
         return results
 
     def token_based_chunking(self, search_results, chunk_size=300):
+        # 簡易的な文字数ベースのチャンキングに変更（tokenizer依存を消すため）
         chunks = []
         metadatas = []
         for res in search_results:
             title, url, content = res["title"], res["url"], res["content"]
             source_str = f" (出典: {title})"
-            source_tokens = len(self.tokenizer.encode(source_str, add_special_tokens=False))
-            effective_limit = chunk_size - source_tokens
+            
+            # 1文字≒1トークンと仮定して簡易計算（日本語の場合）
+            effective_limit = chunk_size
+            
             sentences = content.replace("。", "。\n").split("\n")
             current_chunk_text = ""
-            current_chunk_tokens = 0
+            current_chunk_len = 0
+            
             for sentence in sentences:
                 if not sentence.strip(): continue
-                sent_token_len = len(self.tokenizer.encode(sentence, add_special_tokens=False))
-                if current_chunk_tokens + sent_token_len > effective_limit:
+                sent_len = len(sentence)
+                
+                if current_chunk_len + sent_len > effective_limit:
                     if current_chunk_text:
                         chunks.append(current_chunk_text + source_str)
                         metadatas.append({"title": title, "url": url})
                     current_chunk_text = sentence
-                    current_chunk_tokens = sent_token_len
+                    current_chunk_len = sent_len
                 else:
                     current_chunk_text += sentence
-                    current_chunk_tokens += sent_token_len
+                    current_chunk_len += sent_len
             if current_chunk_text:
                 chunks.append(current_chunk_text + source_str)
                 metadatas.append({"title": title, "url": url})
@@ -167,7 +173,6 @@ class RAGSystem:
         self.chunked_data, self.chunked_metadata = self.token_based_chunking(raw_data)
         
         print("Vectorizing data with multilingual-e5-small...")
-        # e5 models usually require 'passage: ' prefix for documents
         passage_prefixed_data = [f"passage: {chunk}" for chunk in self.chunked_data]
         self.docs_embeddings = self.embd_model.encode(passage_prefixed_data, batch_size=32, show_progress_bar=False)
         norms = np.linalg.norm(self.docs_embeddings, axis=1, keepdims=True)
@@ -186,7 +191,6 @@ class RAGSystem:
         print("Data preparation complete and cached.")
 
     def search(self, query: str, top_k: int = 2) -> Tuple[List[str], List[str]]:
-        # e5 models require 'query: ' prefix for queries
         query_vec = self.embd_model.encode([f"query: {query}"], show_progress_bar=False)[0]
         query_vec = query_vec / np.linalg.norm(query_vec)
         raw_scores = cosine_similarity([query_vec], self.docs_embeddings)[0]
@@ -211,36 +215,28 @@ class RAGSystem:
         return context_texts, ref_urls
 
     def generate_answer(self, query: str, context: str) -> str:
-        # プロンプトを極限まで圧縮してトークン数を節約
-        prompt = f"""あなたは岩手県立大学のAIアシスタントです。
-【参照資料】のみを用いて、ユーザーの【質問】に簡潔に答えてください。
-情報がない場合は『NO_INFO』と出力してください。
-
+        prompt = f"""<|im_start|>system
+あなたは岩手県立大学のAIアシスタントです。【参照資料】のみを用いて、ユーザーの【質問】に簡潔に答えてください。情報がない場合は『NO_INFO』と出力してください。<|im_end|>
+<|im_start|>user
 ### 質問
 {query}
 
 ### 参照資料
-{context}
-
-### 回答
+{context}<|im_end|>
+<|im_start|>assistant
 """
-        messages = [{"role": "user", "content": prompt}]
-        input_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
-
-        # 生成前のメモリクリーンアップ
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=150,
-                repetition_penalty=1.1,
-                do_sample=False
-            )
         
-        answer = self.tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
+        # Llama.cpp による生成
+        output = self.llm(
+            prompt,
+            max_tokens=200,
+            temperature=0.1, # 安定性重視
+            stop=["<|im_end|>"],
+            echo=False
+        )
+        
+        answer = output["choices"][0]["text"].strip()
+        
         if "NO_INFO" in answer or "申し訳ありません" in answer:
             return "申し訳ありません。現時点の資料には詳しい記載がありませんでした。\n回答に近いと思われる以下のWebページをご確認いただけますでしょうか。"
         return answer

@@ -48,8 +48,8 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    st.caption("🚀 Qwen2.5-1.5B (省メモリ版)")
-    st.caption("📚 20ページ制限 (Chunk300)")
+    st.caption("🚀 Llama.cpp (GGUF)")
+    st.caption("⚡ Native Fast Inference")
 
 # システムのロード
 try:
